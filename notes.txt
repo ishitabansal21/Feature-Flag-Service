@@ -1,0 +1,44 @@
+having postgres via docker
+docker run -d \
+    --name postgres \
+    -e POSTGRES_DB=flags \
+    -e POSTGRES_USER=flaguser \
+    -e POSTGRES_PASSWORD=flagpass \
+    -p 5432:5432 \
+    postgres:15
+
+Installing psql client locally to execute commands : 
+brew install postgresql
+psql --version
+
+For flag-service
+psql postgresql://flaguser:flagpass@localhost/flags -f schema.sql
+
+python3 -m venv venv
+source venv/bin/activate
+python -m pip install -r requirements.txt
+
+DATABASE_URL=postgresql://flaguser:flagpass@localhost/flags uvicorn main:app --reload --port 8000
+
+
+docker run -d \
+    --name redis \
+    -p 6379:6379 \
+    redis:7-alpine
+
+
+what redis is doing here?
+Redis is a key-value store. Think of it like a dictionary. In our case:
+
+  KEY                →  VALUE
+  "flag:dark_mode"   →  { "name": "dark_mode", "enabled": true, "rollout_percentage": 50 }
+  "flag:beta_nav"    →  { "name": "beta_nav", "enabled": false, "rollout_percentage": 0 }
+It just stores that the flag is enabled:true or enabled:false like this..it doesnt store for each user that for each user what is the status it 
+does not store that it stores that right now the flag is on or off.
+
+Redis stores the flag definition — { enabled: true, rollout_percentage: 50 } — keyed by flag name (e.g. flag:dark_mode). It does NOT
+store anything per user. So once any user triggers the first DB lookup, every user after that gets the flag data from Redis. The
+per-user rollout calculation (which 50% gets true vs false) still happens in the app code after the cache lookup, using a hash of the
+user ID. Redis just eliminates the database trip — the logic still runs fresh for every user.
+    
+we set _CACHE_TTL_SECONDS = 60 so after 60 seconds it expires and it fetches the DB again.

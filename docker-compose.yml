@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: flags
+      POSTGRES_USER: flaguser
+      POSTGRES_PASSWORD: flagpass
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  flag-service:
+    build: ./services/flag-service
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://flaguser:flagpass@postgres/flags
+      REDIS_HOST: redis
+      SNS_TOPIC_ARN: ""
+      AWS_REGION: ap-south-1
+    depends_on:
+      - postgres
+      - redis
+
+  evaluation-service:
+    build: ./services/evaluation-service
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql://flaguser:flagpass@postgres/flags
+      REDIS_HOST: redis
+    depends_on:
+      - postgres
+      - redis
