@@ -183,8 +183,159 @@ These are planned for later phases of the project and will be done by hand as pa
 
 ---
 
-## Current Status
+## Current Status (after Phase 1)
 
 The backend code for all 3 services is written. The Flag Service is fully working and
 tested. PostgreSQL is running in Docker. The next step is to get Redis running in Docker
 and then start the Evaluation Service so we can test the full flag evaluation flow.
+
+---
+
+# Phase 2 — Kubernetes on minikube (completed 2026-06-10)
+
+## What is Kubernetes and why we use it
+
+Docker Compose runs containers on one machine. If that machine dies, everything dies.
+Kubernetes (K8s) is a cluster manager — it runs your containers across many machines and
+handles restarts, scaling, and networking automatically. You declare what you want ("I want
+2 copies of flag-service running") and K8s makes it happen and keeps it that way forever.
+
+minikube is a fake K8s cluster that runs on your laptop for free. It behaves exactly like
+a real AWS EKS cluster, so everything you learn here transfers directly to production.
+
+---
+
+## Step 1 — Raw K8s manifests (the k8s/ folder)
+
+We created these files one by one in this order. Each one is a YAML file that tells K8s
+about one piece of your system.
+
+### k8s/namespace.yaml
+A namespace is just a logical folder inside K8s. Instead of everything landing in the
+default namespace, all our resources live in `feature-flags`. Applied with:
+`kubectl apply -f k8s/namespace.yaml`
+
+### k8s/configmap.yaml
+Stores non-secret environment variables as key-value pairs. Our flag-service reads
+REDIS_HOST, AWS_REGION, and LOG_LEVEL from here. K8s injects them as env vars into
+the pod automatically. Applied and verified with `kubectl describe configmap`.
+
+### k8s/secret.yaml
+Same as ConfigMap but for sensitive values (passwords). Values must be base64 encoded
+before putting them in the YAML — use `echo -n "value" | base64` to encode.
+K8s hides the values in `kubectl describe` output (shows byte count only, not the value).
+Stores DATABASE_URL and DB_PASSWORD.
+
+### k8s/deployment.yaml
+The most important file. Tells K8s:
+- Run 2 copies (replicas) of flag-service:latest
+- Check /health every 10s — if it fails 3 times, restart the pod (liveness probe)
+- Check /ready every 5s — if it fails, stop sending traffic to this pod (readiness probe)
+- Limit each pod to 256Mi RAM and 250m CPU
+- Use the flag-service-sa service account (not the default one)
+- Inject all env vars from the ConfigMap and Secret
+
+### k8s/postgres.yaml
+Runs postgres:15 as a K8s Deployment AND creates a Service for it. The Service gives
+postgres a stable hostname "postgres" inside the cluster — that is why DATABASE_URL has
+@postgres:5432 in it. Without the Service, pods cannot find postgres by name.
+
+### k8s/redis.yaml
+Same pattern as postgres — runs redis:7-alpine and gives it the stable hostname "redis"
+inside the cluster. The evaluation-service connects to redis:6379.
+
+### k8s/evaluation-deployment.yaml
+Runs the evaluation-service (port 8001) as a Deployment + Service. Gets REDIS_HOST and
+DATABASE_URL injected as env vars. No readiness probe — only a liveness probe.
+
+### k8s/service.yaml
+ClusterIP service for flag-service on port 8000. ClusterIP means it is only reachable
+inside the cluster. Other pods can call http://flag-service:8000. Not exposed to the internet.
+
+### k8s/hpa.yaml
+HorizontalPodAutoscaler — watches CPU across flag-service pods. If average CPU goes above
+50%, K8s automatically adds more pods (up to max 5). If CPU drops, it scales back down to
+min 2. Needs metrics-server addon: `minikube addons enable metrics-server`.
+Check CPU with: `kubectl top pods -n feature-flags`
+
+### k8s/rbac.yaml
+Three resources in one file:
+- ServiceAccount (flag-service-sa) — gives the pod an identity
+- Role (flag-service-role) — defines what it can do: get/list configmaps and secrets
+- RoleBinding — connects the identity to the permissions
+
+Without RBAC, every pod uses the default service account with no defined permissions.
+With RBAC, each service has its own identity and minimum required permissions.
+
+---
+
+## Step 2 — Helm chart (the helm/ folder)
+
+After all raw YAML was working, we packaged everything into a Helm chart.
+
+### What Helm solves
+Without Helm: 8 separate `kubectl apply` commands to deploy. No easy way to have
+different config for dev/staging/prod without duplicating files.
+
+With Helm: one `helm install` command deploys everything. Values like replicas, image tag,
+memory limits are variables — you change them per environment without touching templates.
+
+### What we built
+- `helm/feature-flag-chart/Chart.yaml` — chart metadata (name, version)
+- `helm/feature-flag-chart/values.yaml` — all variables in one place
+- `helm/feature-flag-chart/templates/deployment.yaml` — deployment with {{ .Values.xxx }}
+- `helm/feature-flag-chart/templates/service.yaml`
+- `helm/feature-flag-chart/templates/hpa.yaml`
+- `helm/feature-flag-chart/templates/rbac.yaml`
+
+### Helm commands used
+```bash
+helm lint helm/feature-flag-chart/           # validate the chart
+helm template feature-flags helm/...         # preview rendered YAML without deploying
+helm install feature-flags helm/... -n feature-flags    # deploy everything at once
+helm upgrade feature-flags helm/... --set replicas=3    # change a value without editing files
+helm history feature-flags -n feature-flags  # see all revisions
+helm rollback feature-flags 1 -n feature-flags          # roll back to revision 1
+```
+
+---
+
+## Important workflow notes
+
+**Building images for minikube:**
+minikube has its own Docker environment, separate from your Mac's Docker. K8s always
+looks for images in minikube's Docker. Before running `docker build`, you must run:
+`eval $(minikube docker-env)`
+This points your terminal at minikube's Docker. Only affects the current terminal tab.
+
+**After every minikube restart — reload the schema:**
+Postgres has no PersistentVolume so data is lost on restart. After `minikube start`:
+```
+kubectl exec -n feature-flags deployment/postgres -- psql -U flaguser -d flags -c "
+CREATE TABLE IF NOT EXISTS flags (...);
+CREATE TABLE IF NOT EXISTS flag_audit (...);"
+```
+
+**Accessing services from your Mac:**
+Pods are not reachable from your Mac directly. Use port-forward:
+```
+kubectl port-forward -n feature-flags svc/flag-service 8000:8000
+kubectl port-forward -n feature-flags svc/evaluation-service 8001:8001
+```
+
+---
+
+## Current Status (end of Phase 2)
+
+All 6 pods running in minikube:
+- flag-service x2
+- evaluation-service x2
+- postgres x1
+- redis x1
+
+Full end-to-end tested: POST a flag via flag-service → evaluate it via evaluation-service
+→ Redis caches it → second evaluate is served from cache.
+
+Helm chart installed and managing all resources: flag-service, evaluation-service, redis, HPA, RBAC.
+
+Next: Phase 3 — Terraform to provision real AWS infrastructure (EKS, RDS, Redis, ECR).

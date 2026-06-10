@@ -1,0 +1,51 @@
+namespace: feature-flags
+
+replicas: 2
+
+image:
+  repository: flag-service
+  tag: latest
+  pullPolicy: Never
+
+service:
+  port: 8000
+  type: ClusterIP
+
+resources:
+  requests:
+    cpu: "100m"
+    memory: "128Mi"
+  limits:
+    cpu: "250m"
+    memory: "256Mi"
+
+autoscaling:
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 50
+
+evaluationService:
+  replicas: 2
+  image:
+    repository: evaluation-service
+    tag: latest
+    pullPolicy: Never
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "128Mi"
+    limits:
+      cpu: "250m"
+      memory: "256Mi"
+
+redis:
+  image:
+    repository: redis
+    tag: 7-alpine
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "64Mi"
+    limits:
+      cpu: "100m"
+      memory: "128Mi"

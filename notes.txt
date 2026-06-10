@@ -58,6 +58,7 @@ so execute these command so that whenever docker command is ran for this termnia
 
   eval $(minikube docker-env)
   docker build -t flag-service:latest services/flag-service/
+  docker build -t evaluation-service:latest services/evaluation-service/ (for this also we need image)
   kubectl get pods -n feature-flags
 
 After this pods could pull image they were running but for ready
