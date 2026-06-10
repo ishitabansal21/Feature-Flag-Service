@@ -42,3 +42,38 @@ per-user rollout calculation (which 50% gets true vs false) still happens in the
 user ID. Redis just eliminates the database trip — the logic still runs fresh for every user.
     
 we set _CACHE_TTL_SECONDS = 60 so after 60 seconds it expires and it fetches the DB again.
+
+
+Start with k8s:
+install minikube :
+brew install minikube
+minikube start --driver=docker (keep docker open)
+minikube status
+kubectl get nodes
+
+make all .yaml files 
+kubectl apply -f all yaml files
+deployment.yaml when i applied pods couldn't pull image as k8s look for images in minikube's docker not my mac computer
+so execute these command so that whenever docker command is ran for this termnial is looks into minikube docker
+
+  eval $(minikube docker-env)
+  docker build -t flag-service:latest services/flag-service/
+  kubectl get pods -n feature-flags
+
+After this pods could pull image they were running but for ready
+/heath was 200
+/ready was 503 coz postgres was not running inside minikube and pod wont be able to send traffic to it.
+so made a postgres.yaml
+After apply postgres.yml pods were in ready state
+
+but our flags table is still not into postgres deployment so exec into that container and run schema.sql full commands
+
+
+Was starting to implement HPA ...but before that i want to see the cpu usage of pods so for that i need metrics server installed
+minikube addons enable metrics-server
+
+After making rbac.yaml and applying
+edited the deployemnt.yaml to use that service account added this:
+spec:
+        serviceAccountName: flag-service-sa
+        containers:

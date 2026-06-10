@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flag-service-config
+  namespace: feature-flags
+data:
+  REDIS_HOST: "redis"
+  AWS_REGION: "ap-south-1"
+  LOG_LEVEL: "info"
